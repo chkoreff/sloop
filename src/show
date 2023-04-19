@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# Show processes running a command.
+show_ps()
+	{
+	ps o pid,ppid,pgid,command -C $1
+	#ps --no-header -o pid -C $1
+
+	pid_file=../run/pid
+	if [ -e $pid_file ]; then
+		echo -n "pid file: "
+		cat $pid_file
+	fi
+	}
+
+# Show processes listening or connected to an address.
+show_lsof()
+	{
+	ip=$1
+	port=$2
+
+	# Can use -t to list only the pids.
+	lsof -i4TCP@${ip}:${port}
+	}
+
+show_ps world
+
+#echo
+#show_lsof 127.0.0.1 9722

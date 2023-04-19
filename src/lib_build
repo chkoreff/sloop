@@ -1,0 +1,155 @@
+#!/bin/sh
+# These are common shell routines used by build scripts, sourced with ".".
+# These build scripts do follow header dependencies.
+
+# stale $target $source1 ... $sourceN
+# Return 1 if $target does not exist or is older than any $source.
+stale()
+	{
+	local target="$1"; shift
+	if [ ! -e $target ]; then return 1; fi
+	for source in "$@"; do
+		if [ $source -nt $target ]; then return 1; fi
+	done
+	return 0
+	}
+
+# Run a system command and exit if unsuccessful.
+run()
+	{
+	if [ $verbose ]; then echo $@; fi
+	$@
+	local code=$?
+	if [ $code -ne 0 ]; then exit $code; fi
+	}
+
+# Get the list of header files that a C source file includes.
+get_headers()
+	{
+	local name=$1
+	local file_c=$name.c
+
+	grep -e "^#include <.*>" $file_c |
+	sed 's/^#include <\(.*\)>.*$/\1/' |
+	(
+	while read file_h; do
+		echo -n "$file_h "
+	done;
+	)
+	}
+
+# Compile a source file if it's newer than the object file.
+#
+# I compile with -O3 because that enables -finline-functions.  You can see
+# that by running "gcc -c -Q -O3 --help=optimizers".
+#
+# I do not use -ansi because somehow that makes a bunch of symbols in various
+# system header files invisible (e.g. fdopen, snprintf, etc.)
+
+compile()
+	{
+	local name="$1"
+	local options="$2"
+
+	local file_o=../obj/$name.o
+	objects="$objects $file_o"
+
+	local file_c=$name.c
+	local file_o=../obj/$name.o
+	mkdir -p $(dirname $file_o)
+
+	# Make sure header cache file obj/$name.dep is up to date.
+	local file_dep=../obj/$name.dep
+
+	stale $file_dep $file_c
+	if [ $? -eq 1 ]; then
+		local headers="$(get_headers $name)"
+		echo $headers >$file_dep
+	fi
+
+	stale $file_o $file_c
+	local update=$?
+
+	if [ $update -eq 0 ]; then
+		local headers="$(cat $file_dep)"
+		stale $file_o $headers
+		update=$?
+	fi
+
+	if [ $update -eq 1 ]; then
+		# Append common options.
+		options="$options -Wall -Werror -Wunused-parameter -pedantic"
+
+		# The next option enforces ISO C90 compatibility.
+		options="$options -Wdeclaration-after-statement"
+
+		run gcc -c $options -O3 -I . $file_c -o $file_o
+	fi
+	}
+
+make()
+	{
+	local name="$1"
+	compile $name ""
+	}
+
+make_PIC()
+	{
+	local name="$1"
+	compile $name "-fPIC"
+	}
+
+# Include a name in the list of objects to be linked.
+need()
+	{
+	local name="$1"
+	local file_o=../obj/$name.o
+	objects="$objects $file_o"
+	}
+
+# Make a library.  I use -fPIC (Position Independent Code) so the object can
+# be linked into a shared library.
+make_lib()
+	{
+	local name="$1"
+	local file_so=../lib/$name.so
+
+	stale $file_so $objects
+	local update=$?
+
+	if [ $update -eq 1 ]; then
+		mkdir -p $(dirname $file_so)
+		run gcc -s -shared $objects -o $file_so
+	fi
+	objects=""
+	}
+
+# Link the object files if any is newer than the executable file.
+link()
+	{
+	local name="$1"
+	local file_e=../bin/$name
+	stale $file_e $objects
+	if [ $? -eq 1 ]; then
+		mkdir -p $(dirname $file_e)
+		run gcc -rdynamic -s $objects -o $file_e -lm -ldl
+	fi
+	objects=""
+	}
+
+erase()
+	{
+	rm -rf ../obj
+	rm -rf ../lib
+	rm -rf ../bin
+	}
+
+case "$1" in
+	"") ;;
+	"clean") erase ;;
+	"erase") erase; exit ;;
+	*)
+		echo >&2 "Usage: $0 [ clean | erase ]"
+		exit 2
+		;;
+esac
