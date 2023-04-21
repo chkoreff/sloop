@@ -3,7 +3,7 @@
 # Show processes running a command.
 show_ps()
 	{
-	ps o pid,ppid,pgid,command -C $1
+	ps o pid,ppid,pgid,size,command -C $1
 	#ps --no-header -o pid -C $1
 
 	pid_file=../run/pid

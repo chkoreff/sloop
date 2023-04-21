@@ -168,7 +168,7 @@ static FILE *open_error_log(void)
 	}
 
 // Accept an inbound connection and handle requests.
-static void do_connection(int fd_listen, void do_session(void))
+static void do_connection(int fd_listen, void do_session(int fd))
 	{
 	{
 	/* If a child exits I get a SIGCHLD signal which interrupts any system
@@ -186,8 +186,8 @@ static void do_connection(int fd_listen, void do_session(void))
 	struct sockaddr_in addr;
 	socklen_t size = sizeof(addr);
 
-	int channel = accept(fd_listen, (struct sockaddr *)&addr, &size);
-	if (channel != -1)
+	int fd = accept(fd_listen, (struct sockaddr *)&addr, &size);
+	if (fd != -1)
 	{
 	// Fork a process to handle the connection.
 	pid_t pid = do_fork();
@@ -201,32 +201,24 @@ static void do_connection(int fd_listen, void do_session(void))
 		receive connections. */
 		close(fd_listen);
 
-		// Close stdin and stdout and replace them with the client socket.
+		// Close stdin and stdout in child so it can't interact with console.
 		close(0);
 		close(1);
 
-		do_dup2(channel,0);
-		do_dup2(channel,1);
-
-		// Make stdout unbuffered to you don't have to call fflush.
-		setvbuf(stdout,0,_IONBF,0);
-
-		do_close(channel);
-
-		do_session();
+		do_session(fd);
 		exit(0);
 		}
 	else
 		{
 		// Parent process
-		do_close(channel);
+		do_close(fd);
 		}
 	}
 	}
 	}
 
 static void start_server(const char *ip, unsigned long port,
-	void do_session(void))
+	void do_session(int fd))
 	{
 	// Fork the server so it runs in the background.
 	pid_t pid = do_fork();
@@ -262,7 +254,7 @@ static void usage(void)
 	}
 
 static void run_sloop(const char *ip, unsigned long port,
-	void do_session(void))
+	void do_session(int fd))
 	{
 	int start = 0;
 
@@ -314,7 +306,7 @@ static void beg_path(void)
 
 int run_server(int _argc, const char *_argv[],
 	const char *ip, unsigned long port,
-	void do_session(void)
+	void do_session(int fd)
 	)
 	{
 	argc = _argc;

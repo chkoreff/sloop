@@ -1,7 +1,111 @@
 #include <sloop.h>
+#include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h> // exit
+// #include <stdlib.h> // malloc realloc LATER dynamic buffers
 #include <unistd.h> // read alarm
+#include <util.h> // die
+
+typedef struct buffer
+	{
+	size_t len;
+	size_t size;
+	char *data;
+	} buffer;
+
+// LATER: Always need room for a decent size write, so make sure there's at
+// least 1024 available before calling vsnprintf.
+void bprintf(buffer *buf, const char *format, ...)
+	{
+	va_list args;
+	va_start(args,format);
+
+	{
+	char *str = buf->data + buf->len;
+	size_t size = buf->size - buf->len;
+	int nb = vsnprintf(str, size, format, args);
+
+	if (nb < 0 || nb >= size)
+		{
+		fprintf(stderr,"Truncated output: size = %lu, nb = %d\n", size, nb);
+		die(0);
+		}
+	buf->len += nb;
+	}
+
+	va_end(args);
+	}
+
+void do_write(int fd, const char *buf, size_t count)
+	{
+	ssize_t nb = write(fd, buf, count);
+	if (nb != count)
+		die("ERROR on write"); // LATER iterate until write is complete
+	}
+
+// LATER keep reading until you see the CRLF on a line by itself which
+// indicates end of headers.
+static void read_request(int fd, buffer *buf)
+	{
+	ssize_t nb = read(fd, buf->data, buf->size);
+	if (nb > 0)
+		{
+		buf->len += nb;
+
+		if (0) // LATER elim
+		{
+		fprintf(stderr, "read %ld bytes\n",buf->len);
+		do_write(2,buf->data,buf->len);
+		}
+		}
+	}
+
+static void bsend(buffer *buf, int fd)
+	{
+	do_write(fd, buf->data, buf->len);
+	buf->len = 0;
+	}
+
+// LATER 20230421: Include an example of "Transfer-Encoding: chunked"
+
+static void meta(buffer *buf, const char *key, const char *val)
+	{
+	bprintf(buf,"<meta http-equiv=\"%s\" content=\"%s\">\n", key, val);
+	}
+
+static void write_response(int fd)
+	{
+	char data[8192]; // LATER dynamic buffers
+	buffer s_buf = { 0, sizeof(data), data };
+	buffer *buf = &s_buf;
+
+	bprintf(buf,"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n");
+	bprintf(buf,"<html>\n");
+
+	bprintf(buf,"<head>\n");
+	meta(buf, "Content-Type", "text/html; charset=utf-8");
+	meta(buf, "Content-Language", "en-us");
+	bprintf(buf,"<title>%s</title>\n", "Test");
+	bprintf(buf,"</head>\n");
+
+	bprintf(buf,"<body>\n");
+	bprintf(buf,"<p>\n");
+	bprintf(buf,"This is a test.\n");
+	bprintf(buf,"</body>\n");
+	bprintf(buf,"</html>\n");
+
+	dprintf(fd,"HTTP/1.1 200 OK\n");
+	dprintf(fd,"Content-Type: text/html\n");
+	dprintf(fd,"Content-Length: %lu\n",buf->len);
+	dprintf(fd,"\n");
+
+	if (0) // LATER elim test code
+	{
+	fprintf(stderr,"length = %lu\n",buf->len);
+	printf("length = %lu\n",buf->len); // No effect because stdout is closed.
+	}
+
+	bsend(buf,fd);
+	}
 
 // Number of requests to allow per session (inbound socket connection)
 const int max_request = 10;
@@ -9,67 +113,30 @@ const int max_request = 10;
 // Maximum number of seconds to wait for a full request to come in
 const int max_time = 30;
 
-static char g_data[4096];
-static ssize_t g_len;
-
-static void read_request(void)
+static void do_session(int fd)
 	{
-	g_len = read(0,g_data,sizeof(g_data));
-	if (g_len <= 0)
-		exit(0);
-	// fprintf(stderr, "read %ld bytes\n",g_len);
-	}
+	char buf_in[8192]; // LATER dynamic buffers
+	buffer b_in = { 0, sizeof(buf_in), buf_in };
 
-/*
-Here is a sample page that requires knowing the content length up front.
+	buffer *buf = &b_in;
 
-LATER 20230419
-I'll work on library functions that support both protocols:
-
-P1: Content-Length encoding
-P2: Transfer-Encoding: chunked
-
-To support P1 I would need to run the response function in a separate process
-and buffer up its entire output, which would not include the Content-Length
-header.  Then I would assess the length of the content after the headers and
-insert the Content-Length as I send it back to the client.
-
-To support P2 I would also run the response function in a separate process, but
-in this case I would buffer the output in somewhat large chunks and send them
-out with the proper Transfer-Encoding chunk delimiters when each chunk fills up
-and at end of transmission.
-*/
-static void write_response(void)
-	{
-	int length = 257;
-	printf("HTTP/1.1 200 OK\n");
-	printf("Content-Type: text/html\n");
-	printf("Content-Length: %d\n",length);
-	printf("\n");
-	printf("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n");
-	printf("<html>\n");
-	printf("<head>\n");
-	printf("<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">\n");
-	printf("<meta http-equiv=\"Content-Language\" content=\"en-us\">\n");
-	printf("<title>Test</title>\n");
-	printf("</head>\n");
-	printf("<body>\n");
-	printf("<p>\n");
-	printf("This is a test.\n");
-	printf("</body>\n");
-	printf("</html>\n");
-	}
-
-static void do_session(void)
-	{
 	for (int i = 0; i < max_request; i++)
 		{
 		alarm(max_time);
-		read_request();
+
+		buf->len = 0;
+		read_request(fd,buf);
+
 		alarm(0);
 
-		write_response();
+		if (buf->len == 0)
+			break;
+
+		write_response(fd);
 		}
+
+	if (0)
+		fprintf(stderr,"== end of session\n"); // LATER elim
 	}
 
 int main(int argc, const char *argv[])
