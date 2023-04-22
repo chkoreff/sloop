@@ -1,7 +1,7 @@
 #include <sloop.h>
 #include <stdarg.h>
 #include <stdio.h>
-// #include <stdlib.h> // malloc realloc LATER dynamic buffers
+#include <stdlib.h> // realloc
 #include <unistd.h> // read alarm
 #include <util.h> // die
 
@@ -11,6 +11,27 @@ typedef struct buffer
 	size_t size;
 	char *data;
 	} buffer;
+
+static void buf_grow(buffer *buf, size_t delta)
+	{
+	size_t size = buf->size + delta;
+	char *data = realloc(buf->data, size);
+
+	if (data == NULL) die("Out of memory");
+	buf->size = size;
+	buf->data = data;
+
+	if (0) fprintf(stderr,"buffer size is %lu\n",buf->size); // LATER elim
+	}
+
+static void buf_clear(buffer *buf)
+	{
+	free(buf->data);
+
+	buf->len = 0;
+	buf->size = 0;
+	buf->data = 0;
+	}
 
 // LATER: Always need room for a decent size write, so make sure there's at
 // least 1024 available before calling vsnprintf.
@@ -43,7 +64,7 @@ void do_write(int fd, const char *buf, size_t count)
 	}
 
 // LATER keep reading until you see the CRLF on a line by itself which
-// indicates end of headers.
+// indicates end of headers.  Call buf_grow as needed.
 static void read_request(int fd, buffer *buf)
 	{
 	ssize_t nb = read(fd, buf->data, buf->size);
@@ -72,12 +93,11 @@ static void meta(buffer *buf, const char *key, const char *val)
 	bprintf(buf,"<meta http-equiv=\"%s\" content=\"%s\">\n", key, val);
 	}
 
-static void write_response(int fd)
+// LATER Respond differently to the favicon.ico request from Brave browser.
+// GET / HTTP/1.1
+// GET /favicon.ico HTTP/1.1
+static void compose_page(buffer *buf)
 	{
-	char data[8192]; // LATER dynamic buffers
-	buffer s_buf = { 0, sizeof(data), data };
-	buffer *buf = &s_buf;
-
 	bprintf(buf,"<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n");
 	bprintf(buf,"<html>\n");
 
@@ -91,8 +111,12 @@ static void write_response(int fd)
 	bprintf(buf,"<p>\n");
 	bprintf(buf,"This is a test.\n");
 	bprintf(buf,"</body>\n");
-	bprintf(buf,"</html>\n");
 
+	bprintf(buf,"</html>\n");
+	}
+
+static void send_html(buffer *buf, int fd)
+	{
 	dprintf(fd,"HTTP/1.1 200 OK\n");
 	dprintf(fd,"Content-Type: text/html\n");
 	dprintf(fd,"Content-Length: %lu\n",buf->len);
@@ -107,6 +131,12 @@ static void write_response(int fd)
 	bsend(buf,fd);
 	}
 
+static void write_response(buffer *buf, int fd)
+	{
+	compose_page(buf);
+	send_html(buf,fd);
+	}
+
 // Number of requests to allow per session (inbound socket connection)
 const int max_request = 10;
 
@@ -115,28 +145,34 @@ const int max_time = 30;
 
 static void do_session(int fd)
 	{
-	char buf_in[8192]; // LATER dynamic buffers
-	buffer b_in = { 0, sizeof(buf_in), buf_in };
+	buffer *buf_in = &((buffer){0});
+	buffer *buf_out = &((buffer){0});
 
-	buffer *buf = &b_in;
+	size_t delta = 8192;
+
+	buf_grow(buf_in,delta);
+	buf_grow(buf_out,delta);
 
 	for (int i = 0; i < max_request; i++)
 		{
 		alarm(max_time);
 
-		buf->len = 0;
-		read_request(fd,buf);
+		buf_in->len = 0;
+		read_request(fd,buf_in);
 
 		alarm(0);
 
-		if (buf->len == 0)
+		if (buf_in->len == 0) // disconnect or timeout
 			break;
 
-		write_response(fd);
+		if (0) fprintf(stderr,"response %d\n",i); // LATER elim
+		write_response(buf_out,fd);
 		}
 
-	if (0)
-		fprintf(stderr,"== end of session\n"); // LATER elim
+	if (0) fprintf(stderr,"== end of session\n"); // LATER elim
+
+	buf_clear(buf_in);
+	buf_clear(buf_out);
 	}
 
 int main(int argc, const char *argv[])
