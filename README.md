@@ -4,8 +4,8 @@
 
 This server program allows inbound connections from clients and can interact
 with them in any conceivable way.  It is typically used as a web server.  I
-have written it in plain C and stripped it down as far as possible, e.g. it
-does not use malloc.
+have written it in plain C and stripped it down as far as possible.  It does
+use realloc at one point in buffer.c.
 
 This code distills my experience with writing servers in various languages,
 including Perl and Fexl (which uses C).  My goal is to make the code as simple
